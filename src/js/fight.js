@@ -17,11 +17,11 @@ const Fight = (() => {
   const ARENA_W = 960, FLOOR_Y = 440, STAGE_H = 540;
   const START_X = [330, 630];
   const EDGE = 40, MIN_GAP = 64;
-  const WALK = 175, BACK_WALK = 135, JUMP_V = 640, JUMP_X = 190, GRAV = 1900;
+  const WALK = 210, BACK_WALK = 165, JUMP_V = 735, JUMP_X = 215, GRAV = 2500;
   const ROUND_TIME = 30, POINTS_TO_WIN = 4, ROUNDS_TO_WIN = 2;
   const STAND_H = 150, CROUCH_H = 95;
   // phase lengths in seconds
-  const T_INTRO = 1.9, T_REMARK = 1.2, T_POINT = 2.0, T_ROUND = 2.8;
+  const T_INTRO = 1.5, T_REMARK = 0.8, T_POINT = 1.4, T_ROUND = 2.2;
 
   // Moves. startup/active/recover in seconds. reach: how far in front of the attacker's centre it lands.
   // height: 'high' misses a crouching fighter, 'low' misses a jumping one, 'mid' hits both standing and crouching.
@@ -37,10 +37,13 @@ const Fight = (() => {
     sweep:      { startup: 0.16, active: 0.12, recover: 0.34, reach: 116, height: 'low',  points: 2, crouch: true },
     flykick:    { startup: 0.08, active: 0.30, recover: 0.12, reach: 100, height: 'high', points: 2, air: true }
   };
+  // SPEED > 1 makes every move quicker than the table above (1.2 = 20% faster).
+  const SPEED = 1.2;
+  for (const k in MOVES) for (const p of ['startup', 'active', 'recover']) MOVES[k][p] = Math.round(MOVES[k][p] / SPEED * 1000) / 1000;
   const MOVE_NAMES = Object.keys(MOVES);
   // Fighter states (act). How long the timed ones last:
   const ACTS = ['idle', 'walk', 'crouch', 'block', 'jump', 'attack', 'hit', 'down', 'win', 'lose'];
-  const T_BLOCK = 0.22, T_HIT = 0.55, T_DOWN = 1.6;
+  const T_BLOCK = 0.18, T_HIT = 0.45, T_DOWN = 1.2;
 
   const NEUTRAL = { l: false, r: false, u: false, d: false, pc: 0, kc: 0, jc: 0 };
 
@@ -55,7 +58,8 @@ const Fight = (() => {
   function create(opts) {
     opts = opts || {};
     const M = { ARENA_W, FLOOR_Y, phase: 'intro', phaseT: 0, round: 1, timer: ROUND_TIME, message: 'ROUND 1',
-      fighters: [newFighter(0, opts.p1 || {}), newFighter(1, opts.p2 || {})], events: [], winner: -1, pointBy: -1, time: 0, introLong: true };
+      fighters: [newFighter(0, opts.p1 || {}), newFighter(1, opts.p2 || {})], events: [], winner: -1, pointBy: -1, time: 0, introLong: true,
+      stage: opts.stage != null ? opts.stage | 0 : Math.floor(Math.random() * 1000) };   // render.js picks the place from this
     return M;
   }
 
@@ -252,12 +256,12 @@ const Fight = (() => {
   // ---------- network snapshots (host -> joiner) ----------
   const r1 = v => Math.round(v * 10) / 10, r3 = v => Math.round(v * 1000) / 1000;
   function snapshot(M) {
-    return { p: M.phase, pt: r3(M.phaseT), r: M.round, tm: r3(M.timer), msg: M.message, w: M.winner, pb: M.pointBy, il: M.introLong ? 1 : 0,
+    return { p: M.phase, pt: r3(M.phaseT), r: M.round, tm: r3(M.timer), msg: M.message, w: M.winner, pb: M.pointBy, il: M.introLong ? 1 : 0, sg: M.stage,
       f: M.fighters.map(f => [r1(f.x), r1(f.y), r1(f.vx), r1(f.vy), f.facing, ACTS.indexOf(f.act), f.move ? MOVE_NAMES.indexOf(f.move) : -1,
         r3(f.t), f.score, f.rounds, (f.crouch ? 1 : 0) | (f.blocking ? 2 : 0) | (f.connected ? 4 : 0), f.walking]) };
   }
   function applySnapshot(M, s) {
-    M.phase = s.p; M.phaseT = s.pt; M.round = s.r; M.timer = s.tm; M.message = s.msg; M.winner = s.w; M.pointBy = s.pb; M.introLong = !!s.il;
+    M.phase = s.p; M.phaseT = s.pt; M.round = s.r; M.timer = s.tm; M.message = s.msg; M.winner = s.w; M.pointBy = s.pb; M.introLong = !!s.il; if (s.sg != null) M.stage = s.sg;
     s.f.forEach((a, i) => {
       const f = M.fighters[i];
       f.nx = a[0]; f.y = a[1]; f.vx = a[2]; f.vy = a[3]; f.facing = a[4]; f.act = ACTS[a[5]] || 'idle';

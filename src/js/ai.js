@@ -8,7 +8,7 @@ function makeCpu(level) {
     const out = () => Object.assign({}, m.hold, { pc: m.pc, kc: m.kc, jc: m.jc });
     if (M.phase !== 'fight' || m.t < m.next) return out();
     const L = m.level, rnd = Math.random;
-    m.next = m.t + lerp(0.38, 0.12, L) + rnd() * 0.12;
+    m.next = m.t + lerp(0.32, 0.1, L) + rnd() * 0.1;
     const fwdKey = f.facing > 0 ? 'r' : 'l', backKey = f.facing > 0 ? 'l' : 'r';
     m.hold = { l: false, r: false, u: false, d: false };
     const dist = Math.abs(o.x - f.x);
