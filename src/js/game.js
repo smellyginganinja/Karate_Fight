@@ -240,7 +240,7 @@ function drawMenu(t) {
     text(it.label(), W / 2, y + 23, 19, '#fff', 'center', '800');
   });
   if (menuNote && performance.now() < menuNote.until) text(menuNote.text, W / 2, 482, 16, '#ffd84a', 'center', '700');
-  text('Arrows + Enter to choose  ·  M mute  ·  F11 / ⌃⌘F fullscreen', W / 2, 515, 13, 'rgba(255,255,255,0.7)', 'center', '500');
+  text('Arrows + Enter to choose  ·  M mute  ·  N music  ·  F11 / ⌃⌘F fullscreen', W / 2, 515, 13, 'rgba(255,255,255,0.7)', 'center', '500');
 }
 function drawHelp() {
   panel(70, 40, W - 140, H - 80);
@@ -297,6 +297,7 @@ function drawPause() {
 
 function handleKeys() {
   if (tap('KeyM')) Sound.toggleMute();
+  if (tap('KeyN')) Sound.toggleMusic();
   if (state === 'menu') {
     if (tap('ArrowUp') || tap('KeyW')) { menuSel = (menuSel + MENU.length - 1) % MENU.length; Sound.play('menuMove'); }
     if (tap('ArrowDown') || tap('KeyS')) { menuSel = (menuSel + 1) % MENU.length; Sound.play('menuMove'); }
@@ -352,6 +353,7 @@ function frame(now) {
 
   // menu backdrop: two CPUs sparring
   const inMenus = state !== 'play' && state !== 'paused';
+  Sound.music(inMenus ? 'menu' : 'fight');
   if (inMenus) {
     if (!demo.m || demo.m.phase === 'matchOver') { demo.m = Fight.create({ p1: { name: 'WHITE' }, p2: { name: 'RED', color: 'red' } }); demo.a = makeCpu(0.5); demo.b = makeCpu(0.5); }
     let e = []; for (let k = 0; k < Math.round(dt / STEP); k++) e = e.concat(Fight.step(demo.m, [demo.a(demo.m, 0, STEP), demo.b(demo.m, 1, STEP)], STEP));

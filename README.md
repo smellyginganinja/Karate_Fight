@@ -19,7 +19,10 @@ An original two-fighter karate game for the browser. Score clean hits for half a
 | Punch | Z, F or . | F | . |
 | Kick | X, G or / | G | / |
 
-P or Esc pauses, M mutes. Controllers: stick or d-pad to move, X/Square punch, B/Circle or Y/Triangle kick, A/Cross jump, Start pause. In 2-player mode with one controller, the controller is Player 2 and Player 1 uses the keyboard; with two controllers each player gets one.
+P or Esc pauses, M mutes all sound, N turns the music on or off. Controllers: stick or d-pad to move, X/Square punch, B/Circle or Y/Triangle kick, A/Cross jump, Start pause. In 2-player mode with one controller, the controller is Player 2 and Player 1 uses the keyboard; with two controllers each player gets one.
+
+## Sound
+All sound is synthesised in the browser with Web Audio, so there are no audio files: original chiptune loops for the menu and the fight, a crowd that murmurs during fights and cheers every point (louder for full points, round wins and the match), plus the hit and block effects.
 
 ## Moves
 | Move | How | Points |
