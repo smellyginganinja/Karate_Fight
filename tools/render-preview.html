@@ -2,51 +2,45 @@
 <html lang="en"><head><meta charset="utf-8"><title>Render preview</title>
 <style>html,body{margin:0;background:#111;overflow:hidden}canvas{display:block}</style></head>
 <body><canvas id="c"></canvas>
+<script src="../src/js/util.js"></script>
+<script src="../src/js/fight.js"></script>
 <script src="../src/js/render.js"></script>
 <script>
-// Art preview: shows every pose and stage without the game. Open in a browser.
-// URL options: ?stage=0..2  &move=name  &t=seconds (freeze)  &gallery=1
-const c = document.getElementById('c'), g = c.getContext('2d');
-const q = new URLSearchParams(location.search);
-function size() { c.width = innerWidth; c.height = innerHeight; } addEventListener('resize', size); size();
-const MOVES = ['idle', 'walk', 'punch', 'reverse_punch', 'high_punch', 'low_punch', 'front_kick', 'high_kick', 'side_kick', 'roundhouse', 'back_kick', 'sweep', 'jump', 'jump_kick', 'flip', 'back_flip', 'block', 'crouch', 'hit', 'down', 'win', 'bow'];
-const start = performance.now() / 1000;
-function fake(name, mt, side, x) {
-  const f = { side, name: side ? 'Kenji' : 'Aiko', color: side ? '#c8323a' : '#f2efe6', x, y: 0, facing: side ? -1 : 1, move: name, moveT: mt, vx: 0 };
-  const d = 0.45;
-  f.phase = mt < 0.12 ? 'startup' : mt < 0.25 ? 'active' : 'recover';
-  if (name === 'walk') f.vx = 60, f.x += Math.sin(mt * 3) * 40;
-  if (/jump|flip/.test(name)) f.y = Math.max(0, Math.sin(Math.min(1, mt / 0.7) * Math.PI) * 140);
+// Art preview: every pose and stage without playing. Open in a browser.
+// URL options: ?gallery=1 (all poses)  &stage=0..2  &move=<act or move name>  &mt=<seconds into it, freezes the pose>
+const g = cvs.getContext('2d'), q = new URLSearchParams(location.search);
+const ITEMS = ['idle', 'walk', 'crouch', 'block', 'jump', ...Object.keys(Fight.MOVES), 'hit', 'down', 'win', 'lose'];
+function fake(name, mt, idx) {
+  const isMove = !!Fight.MOVES[name];
+  const f = { idx, name: idx ? 'Red' : 'White', color: idx ? 'red' : 'white', x: idx ? 600 : 400, y: 0, vx: 0, vy: 0, facing: idx ? -1 : 1,
+    act: isMove ? 'attack' : name, move: isMove ? name : null, t: mt, phase: null, walking: name === 'walk' ? 1 : 0, crouch: name === 'crouch', score: 0, rounds: 0 };
+  if (isMove) { f.phase = Fight.attackPhase(f); f.crouch = !!Fight.MOVES[name].crouch; }
+  if (name === 'jump' || name === 'flykick') f.y = 90;
   return f;
 }
-const state = { fighters: [], events: [], timer: 27, round: 2, pointsToWin: 2, stage: +(q.get('stage') || 0) };
-let lastEv = 0;
-function frame() {
-  const T = q.has('t') ? +q.get('t') : performance.now() / 1000 - start;
-  g.clearRect(0, 0, c.width, c.height);
+function frame(ms) {
+  const T = ms / 1000, W = Fight.ARENA_W, H = Fight.STAGE_H, s = Math.min(VW / W, VH / H);
+  ctx.setTransform(DPR * s, 0, 0, DPR * s, 0, 0);
   if (q.get('gallery')) {
-    g.fillStyle = '#20232b'; g.fillRect(0, 0, c.width, c.height);
-    const cols = 6, cw = c.width / cols, ch = 260;
-    MOVES.forEach((m, k) => {
-      const x = (k % cols) * cw + cw / 2, y = Math.floor(k / cols) * ch + 220;
-      g.fillStyle = 'rgba(255,255,255,0.1)'; g.fillRect(x - cw / 2 + 4, y - 210, cw - 8, ch - 8);
-      const mt = q.has('mt') ? +q.get('mt') : (T % 0.8);
-      const f = fake(m, mt, k % 2, 0); f.x = 0; f.y = 0;
-      Render.drawFighter(g, f, { x, y, scale: 170, t: T, i: k % 2 });
-      Render.text(g, m, x, y + 22, 14, '#fff', 'center', '700');
+    g.fillStyle = '#20232b'; g.fillRect(0, 0, W, H);
+    const cols = 6, cw = W / cols, ch = H / 3;
+    ITEMS.forEach((m, k) => {
+      const x = (k % cols) * cw + cw / 2, y = Math.floor(k / cols) * ch + ch - 26;
+      const mv = Fight.MOVES[m], cyc = mv ? mv.startup + mv.active + mv.recover + 0.3 : 1.2;
+      const f = fake(m, q.has('mt') ? +q.get('mt') : T % cyc, 0);
+      Render.drawFighter(g, f, { x, y, scale: 95, t: T, i: k % 2 });
+      Render.text(g, m, x, y + 14, 11, '#fff', 'center', '700');
     });
   } else {
-    const mv = q.get('move') || MOVES[Math.floor(T / 1.2) % MOVES.length], mt = q.has('mt') ? +q.get('mt') : T % 1.2;
-    state.fighters = [fake(mv, mt, 0, 430), fake(q.get('move2') || 'idle', T, 1, 600)];
-    state.points = [1.5, 1];
-    state.message = q.get('msg') || '';
-    state.events = [];
-    if (!q.has('t') && T - lastEv > 1.2) { lastEv = T; state.events = [{ type: Math.random() < 0.5 ? 'hit' : 'block', x: 560, y: 120 }]; }
-    if (q.get('hit')) state.events = [{ type: q.get('hit'), x: 560, y: 120 }];
-    Render.drawWorld(g, state, { x: 0, y: 0, w: c.width, h: c.height });
-    Render.drawHUD(g, state, { x: 0, y: 0, w: c.width, h: c.height });
+    const name = q.get('move') || ITEMS[Math.floor(T / 1.2) % ITEMS.length];
+    const M = { phase: 'fight', round: 1, timer: 30 - T % 30, message: q.get('msg') || '', stage: +(q.get('stage') || 0), events: [],
+      fighters: [fake(name, q.has('mt') ? +q.get('mt') : T % 1.2, 0), fake('idle', T, 1)] };
+    M.fighters[0].score = 1; M.fighters[1].score = 2; M.fighters[0].rounds = 1;
+    if (q.get('hit') && !window.hitDone) { window.hitDone = 1; M.events = [{ type: q.get('hit'), x: 520, y: 110, points: 2 }]; }
+    Render.drawWorld(g, M, { t: T, dt: 1 / 60 });
+    Render.drawHUD(g, M, { t: T, dt: 1 / 60 });
   }
-  if (!q.has('t')) requestAnimationFrame(frame);
+  requestAnimationFrame(frame);
 }
-frame();
+requestAnimationFrame(frame);
 </script></body></html>

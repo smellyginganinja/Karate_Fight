@@ -1,20 +1,33 @@
-/* All drawing for the fight: stages, fighters, effects and the in-fight HUD.
-   Reads game state only; it never changes the simulation, so online play stays in sync.
-   Public API (globals):
-     drawWorld(ctx, state, view)  - stage, fighters, effects. view = {x, y, w, h} in screen pixels.
-     drawHUD(ctx, state, view)    - names, points, timer, round and big messages.
-     drawFighter(ctx, f, opts)    - one fighter at the current transform (used by drawWorld and menus).
-     Render.backdrop(ctx, w, h, stage) - animated stage art for menu screens.
-     Render.text / Render.panel   - shared UI helpers in the same style. */
-(function () {
+/* Render: everything drawn during a match. Stages, fighters, hit effects and the fight HUD.
+   Reads the match only; it never changes the simulation, so online play stays in sync.
+
+   Contract with game.js:
+     Render.drawWorld(ctx, M, view)  arena + both fighters + effects
+     Render.drawHUD(ctx, M, view)    scores, rounds, timer, message banner
+   Before each call game.js sets ctx's transform so 1 unit = 1 logical stage pixel on a
+   Fight.ARENA_W x Fight.STAGE_H (960 x 540) stage; the floor line is at y = Fight.FLOOR_Y.
+   view = { t: seconds since page load, dt: frame time, labels: [p1 label, p2 label] or null }.
+   M is a Fight match (see fight.js): M.phase, M.phaseT, M.round, M.timer, M.message, M.winner,
+   M.events (this frame's events: hit / block / clash / whiff / swing / jump / land / begin /
+   time / roundOver / matchOver, with x, y (height above floor), by, points), and
+   M.fighters[i]: x, y (height above floor), vx, vy, facing (1 right / -1 left), act, move,
+   phase ('startup' | 'active' | 'recover' while attacking), t (seconds in act), crouch,
+   walking (1 forward / -1 back / 0), blocking, score (half points), rounds, name, color.
+   Optional: M.stage (0..2) picks the stage; otherwise it changes each round.
+
+   Extras: Render.drawFighter(ctx, f, opts) draws one fighter (feet at opts.x, opts.y);
+   Render.backdrop(ctx, w, h, stage) draws a stage without fighters; Render.STAGES lists them.
+   Art preview without the game: tools/render-preview.html. */
+const Render = (function () {
   'use strict';
   const TAU = Math.PI * 2, D = Math.PI / 180;
-  const now = () => performance.now() / 1000;
+  let clock = performance.now() / 1000;
+  const now = () => clock;
   const cl = (v, a, b) => v < a ? a : v > b ? b : v;
   const mix = (a, b, t) => a + (b - a) * t;
   const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
   const easeOut = t => 1 - (1 - t) * (1 - t);
-  const G = name => (typeof window !== 'undefined' && window[name] !== undefined) ? window[name] : undefined;
+  const FT = () => (typeof Fight !== 'undefined' ? Fight : {});
 
   // ---------- colour helpers ----------
   function hexRgb(c) {
@@ -61,7 +74,7 @@
     tuck:   { lean: 30, head: 10, fa: [100, 120], ba: [90, 120], fl: [110, -150], bl: [100, -150] },
     hit:    { lean: -26, head: -24, fa: [18, 50], ba: [-12, 60], fl: [16, -30], bl: [-34, -18] },
     hitHard: { lean: -40, head: -34, fa: [-20, 30], ba: [-40, 40], fl: [24, -20], bl: [-40, -10] },
-    down:   { lean: 0, head: 0, fa: [170, 10], ba: [160, 20], fl: [6, -6], bl: [-4, -16], rot: -90 },
+    down:   { lean: 0, head: 0, fa: [170, 10], ba: [160, 20], fl: [6, -6], bl: [-4, -16], rot: 90 },
     getUp:  { lean: 40, head: 10, fa: [30, 40], ba: [10, 40], fl: [70, -130], bl: [-10, -120] },
     win:    { lean: 0, head: -4, fa: [176, 6], ba: [20, 120], fl: [12, -6], bl: [-12, -6] },
     bow:    { lean: 38, head: 24, fa: [10, 10], ba: [6, 10], fl: [4, -2], bl: [-4, -2] },
@@ -78,7 +91,10 @@
   const MOVE_ART = [
     // [test on the move name, wind-up, strike, trail limb ('fa'|'ba'|'fl'|'bl'|null)]
     [/sweep/, 'sweepWind', 'sweep', 'fl'],
-    [/back.?kick|spin|reverse.?kick/, 'chamber', 'backKick', 'bl'],
+    [/spin/, 'chamber', 'backKick', 'bl', true],
+    [/back.?kick|reverse.?kick/, 'chamber', 'backKick', 'bl'],
+    [/fly|jump.*kick|flying|air.?kick/, 'jump', 'jumpKick', 'fl'],
+    [/lunge/, 'punchWind', 'revPunch', 'ba'],
     [/round|roundhouse|hook.?kick|crescent/, 'roundWind', 'roundKick', 'fl'],
     [/side.?kick|thrust|yoko/, 'sideChamber', 'sideKick', 'fl'],
     [/high.?kick|axe|head.?kick/, 'chamber', 'highKick', 'fl'],
@@ -90,10 +106,7 @@
     [/high.*punch|upper|high.?jab/, 'punchWind', 'punchHigh', 'fa'],
     [/punch|jab|strike|chop|fist/, 'punchWind', 'punch', 'fa']
   ];
-  function moveTable() {
-    const F = G('FIGHT') || G('Fight');
-    return (F && (F.MOVES || F.moves)) || G('MOVES') || {};
-  }
+  const moveTable = () => FT().MOVES || {};
   // Seconds per phase for a move, from the sim's table when it has one.
   function phases(name) {
     const m = moveTable()[name] || {};
@@ -101,53 +114,50 @@
     return { s: pick('startup', 'start', 'su') ?? 0.1, a: pick('active', 'act') ?? 0.08, r: pick('recover', 'recovery', 'rec') ?? 0.16 };
   }
   // Works out the pose for a fighter from its state (name, phase, timers), plus what to trail.
-  function poseFor(f, t) {
-    const mv = String(f.move || f.state || 'idle').toLowerCase();
-    const mt = f.moveT || 0, ph = f.phase;
-    const breathe = (Math.sin(t * 3.2 + (f.side || 0) * 1.7) + 1) / 2;
+  function poseFor(f, t, M) {
+    const act = f.act || 'idle', mv = String(f.move || '').toLowerCase(), mt = f.t || 0, ph = f.phase;
+    const breathe = (Math.sin(t * 3.2 + (f.idx || 0) * 1.7) + 1) / 2;
     const idle = lerpPose(P.guard, P.guard2, breathe);
-    const airborne = (f.y || 0) > 2;
-    if (/^(ko|down|fall|knock|ground)/.test(mv) || f.downT > 0) {
-      const k = cl(mt / 0.25, 0, 1);
-      return { pose: lerpPose(P.hitHard, P.down, easeOut(k)) };
+    if (act === 'down') {
+      const dn = FT().T_DOWN || 1.6, up = dn - 0.45;
+      if (mt < up) return { pose: lerpPose(P.hitHard, P.down, easeOut(cl(mt / 0.28, 0, 1))) };
+      const k = cl((mt - up) / 0.45, 0, 1);
+      return { pose: k < 0.5 ? lerpPose(P.down, P.getUp, ease(k * 2)) : lerpPose(P.getUp, idle, ease(k * 2 - 1)) };
     }
-    if (/getup|get_up|rise/.test(mv)) return { pose: lerpPose(P.down, P.getUp, cl(mt / 0.3, 0, 1)) };
-    if (/hit|stun|hurt|recoil/.test(mv) || f.hitT > 0) {
-      const k = Math.sin(cl(mt / 0.3, 0, 1) * Math.PI);
-      return { pose: lerpPose(idle, f.hard ? P.hitHard : P.hit, 0.35 + 0.65 * (mt < 0.06 ? 1 : k)) };
+    if (act === 'hit') {
+      const k = mt < 0.08 ? 1 : 1 - ease(cl((mt - 0.08) / 0.45, 0, 1));
+      return { pose: lerpPose(idle, P.hit, k) };
     }
-    if (/win|victory|celebrat/.test(mv)) return { pose: lerpPose(P.stand, P.win, ease(cl(mt / 0.5, 0, 1))) };
-    if (/bow|ready|intro/.test(mv)) return { pose: lerpPose(P.stand, P.bow, Math.sin(cl(mt / 1.2, 0, 1) * Math.PI)) };
-    if (/lose|defeat/.test(mv)) return { pose: P.lose };
-    if (/block|guard_hold|parry/.test(mv) || f.blocking) return { pose: /low|crouch/.test(mv) || f.crouching ? P.blockLow : P.block };
-    if (/flip|somersault|roll/.test(mv)) {
-      const p = cl(mt / (phases(mv).s + phases(mv).a + phases(mv).r || 0.6), 0, 1);
-      const pose = lerpPose(P.jump, P.tuck, Math.sin(p * Math.PI));
-      pose.rot = (/back/.test(mv) ? -1 : 1) * 360 * ease(p);
-      return { pose };
+    if (act === 'win') return { pose: lerpPose(P.stand, P.win, ease(cl(mt / 0.5, 0, 1))) };
+    if (act === 'lose') return { pose: lerpPose(idle, P.lose, ease(cl(mt / 0.6, 0, 1))) };
+    if (M && M.phase === 'intro' && M.introLong !== false && act === 'idle') {           // bow before the round
+      const k = cl((M.phaseT || 0) / 1.2, 0, 1);
+      return { pose: k < 0.75 ? lerpPose(P.stand, P.bow, Math.sin(k / 0.75 * Math.PI)) : lerpPose(P.stand, idle, ease((k - 0.75) / 0.25)) };
     }
-    for (const [re, wind, hitP, limb] of MOVE_ART) {
-      if (!re.test(mv)) continue;
-      const d = phases(mv); let pose, strike = 0;
-      const air = airborne && /kick/.test(mv) ? 'jumpKick' : hitP;
-      if (ph === 'startup' || (!ph && mt < d.s)) {
-        const k = cl(mt / d.s, 0, 1);
-        pose = k < 0.55 ? lerpPose(idle, P[wind], ease(k / 0.55)) : lerpPose(P[wind], P[air], ease((k - 0.55) / 0.45));
-        strike = k > 0.55 ? (k - 0.55) / 0.45 : 0;
-      } else if (ph === 'active' || (!ph && mt < d.s + d.a)) {
-        pose = P[air]; strike = 1;
-      } else {
-        const k = cl((mt - d.s - d.a) / d.r, 0, 1);
-        pose = lerpPose(P[air], idle, ease(k)); strike = 1 - k;
+    if (act === 'block') return { pose: f.crouch ? P.blockLow : P.block };
+    if (act === 'attack' && mv) {
+      for (const [re, wind, hitP, limb, spin] of MOVE_ART) {
+        if (!re.test(mv)) continue;
+        const d = phases(mv); let pose, strike = 0, turn = 0;
+        const air = (f.y || 0) > 4 && /kick/.test(mv) ? 'jumpKick' : hitP;
+        const p = ph || (mt < d.s ? 'startup' : mt < d.s + d.a ? 'active' : 'recover');
+        if (p === 'startup') {
+          const k = cl(mt / d.s, 0, 1);
+          pose = k < 0.55 ? lerpPose(idle, P[wind], ease(k / 0.55)) : lerpPose(P[wind], P[air], ease((k - 0.55) / 0.45));
+          strike = k > 0.55 ? (k - 0.55) / 0.45 : 0; turn = Math.PI * ease(k);
+        } else if (p === 'active') {
+          pose = P[air]; strike = 1; turn = Math.PI;
+        } else {
+          const k = cl((mt - d.s - d.a) / d.r, 0, 1);
+          pose = lerpPose(P[air], idle, ease(k)); strike = 1 - k; turn = Math.PI * (1 + ease(k));
+        }
+        return { pose, limb, strike, turn: spin ? turn : 0 };
       }
-      return { pose, limb, strike };
     }
-    if (airborne || /jump/.test(mv)) return { pose: lerpPose(P.jump, P.tuck, cl(((f.y || 0) - 20) / 120, 0, 0.6)) };
-    if (/crouch|duck/.test(mv) || f.crouching) return { pose: P.crouch };
-    const vx = f.vx || 0;
-    if (/walk|step|move|back/.test(mv) || Math.abs(vx) > 5) {
-      const dir = Math.sign(vx * (f.facing || 1)) || 1;
-      const c = (Math.sin((f.x || 0) * 0.06 * dir) + 1) / 2;
+    if (act === 'jump' || (f.y || 0) > 4) return { pose: lerpPose(P.jump, P.tuck, cl(((f.y || 0) - 10) / 110, 0, 1) * 0.7) };
+    if (act === 'crouch' || f.crouch) return { pose: P.crouch };
+    if (act === 'walk') {
+      const c = (Math.sin(mt * 11 * (f.walking || 1)) + 1) / 2;
       return { pose: lerpPose(P.walkA, P.walkB, c) };
     }
     return { pose: idle };
@@ -200,7 +210,7 @@
   // ---------- fighter drawing ----------
   const SKIN = ['#e9b48e', '#c98d62', '#f1c7a4', '#a8714c'];
   const cache = {};                      // per-fighter render memory (trails, flash timers)
-  function fcache(f, i) { const k = f.id ?? f.side ?? i ?? 0; return cache[k] || (cache[k] = { trail: [], flash: 0, lastHit: -1 }); }
+  function fcache(f, i) { const k = i ?? f.idx ?? 0; return cache[k] || (cache[k] = { trail: [], flash: 0, lastHit: -1 }); }
 
   function limb(g, pts, w, col, outline) {
     g.lineCap = 'round'; g.lineJoin = 'round';
@@ -281,31 +291,26 @@
   }
   const lerpP = (a, b, t) => [mix(a[0], b[0], t), mix(a[1], b[1], t)];
 
+  const GI = { white: '#f1eee4', red: '#c8323a', blue: '#2f5fd0', black: '#2a2a2e', green: '#2f8a4a', gold: '#d9a52b' };
+  const BAND = { white: '#d8262a', red: '#f4f1ea', blue: '#f4d03f', black: '#d8262a', green: '#f4f1ea', gold: '#1b1b1b' };
+  const BELT = { white: '#1b1b1b', red: '#1b1b1b', blue: '#1b1b1b', black: '#c0302a', green: '#1b1b1b', gold: '#1b1b1b' };
   function lookFor(f, i) {
-    const side = f.side ?? i ?? 0;
-    const col = f.color || (side ? '#d23b3b' : '#f2efe6');
-    const light = hexRgb(col).reduce((a, b) => a + b, 0) > 600;
-    return {
-      gi: f.gi || col,
-      belt: f.belt || (light ? '#1b1b1b' : '#1b1b1b'),
-      band: f.band || (light ? '#d8262a' : '#f4f1ea'),
-      skin: f.skin || SKIN[side % SKIN.length],
-      hair: f.hair || (side ? '#2a1a12' : '#151515'),
-      seed: side * 2.3
-    };
+    const side = f.idx ?? i ?? 0, c = f.color || (side ? 'red' : 'white');
+    const gi = GI[c] || (c[0] === '#' ? c : GI.white);
+    return { gi, belt: BELT[c] || '#1b1b1b', band: BAND[c] || '#d8262a', skin: SKIN[side % SKIN.length], hair: side ? '#2a1a12' : '#151515', seed: side * 2.3 };
   }
 
   // f: fighter state. opts: {x, y, scale, i, t, flash, alpha}
   function drawFighter(g, f, opts) {
     opts = opts || {};
-    const t = opts.t ?? now(), i = opts.i ?? f.side ?? 0;
-    const { pose, limb: tl, strike } = poseFor(f, t);
+    const t = opts.t ?? now(), i = opts.i ?? f.idx ?? 0;
+    const { pose, limb: tl, strike, turn } = poseFor(f, t, opts.M);
     const J = skeleton(pose);
     const look = lookFor(f, i);
-    const s = opts.scale || 180, face = f.facing || 1;
+    const s = opts.scale || 155, face = (f.facing || 1) * (turn ? Math.cos(turn) : 1);
     g.save();
     g.translate(opts.x || 0, opts.y || 0);
-    g.scale(s * face, s);
+    g.scale(s * (Math.abs(face) < 0.12 ? Math.sign(face || 1) * 0.12 : face), s);
     if (opts.alpha != null) g.globalAlpha = opts.alpha;
     if (opts.flash > 0) {            // white-hot flash on the frame a hit lands
       const k = cl(opts.flash, 0, 1) * 0.8;
@@ -317,7 +322,7 @@
     // strike point in the caller's space (for trails)
     if (tl && strike > 0.3) {
       const p = tl[1] === 'a' ? J[tl][2] : J[tl][3];
-      return { x: (opts.x || 0) + p[0] * s * face, y: (opts.y || 0) - p[1] * s, strike };
+      return { x: (opts.x || 0) + p[0] * s * face, y: (opts.y || 0) - p[1] * s, strike };  // face includes the spin
     }
     return null;
   }
@@ -327,8 +332,8 @@
   function emit(ev, toScreen, scale) {
     const p = toScreen(ev.x ?? 0, ev.y ?? 100);
     const type = ev.type || 'hit';
-    const big = type === 'ko' || ev.hard || (ev.dmg || ev.points || 1) > 1;
-    if (type === 'hit' || type === 'ko' || type === 'point') {
+    const big = (ev.points || 1) > 1;
+    if (type === 'hit') {
       const n = big ? 34 : 20;
       for (let k = 0; k < n; k++) {
         const a = Math.random() * TAU, v = (big ? 520 : 340) * (0.35 + Math.random());
@@ -338,18 +343,18 @@
       fx.slashes.push({ x: p.x, y: p.y, t: 0, max: 0.16, a: Math.random() * Math.PI, r: (big ? 110 : 70) * scale });
       fx.shake = Math.max(fx.shake, big ? 16 : 8);
       fx.flash = Math.max(fx.flash, big ? 0.35 : 0.12);
-    } else if (type === 'block') {
+    } else if (type === 'block' || type === 'clash') {
+      const clash = type === 'clash';
       for (let k = 0; k < 14; k++) {
-        const a = (Math.random() - 0.5) * 1.6 + (ev.dir === -1 ? 0 : Math.PI), v = 260 * (0.4 + Math.random());
-        fx.parts.push({ x: p.x, y: p.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.25 + Math.random() * 0.2, max: 0.45, r: (1.6 + Math.random() * 2) * scale, col: '#9fe3ff', spark: true });
+        const a = clash ? Math.random() * TAU : (Math.random() - 0.5) * 1.6 + (ev.dir === -1 ? 0 : Math.PI), v = 260 * (0.4 + Math.random());
+        fx.parts.push({ x: p.x, y: p.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0.25 + Math.random() * 0.2, max: 0.45, r: (1.6 + Math.random() * 2) * scale, col: clash ? '#ffd27a' : '#9fe3ff', spark: true });
       }
-      fx.rings.push({ x: p.x, y: p.y, t: 0, max: 0.22, r: 46 * scale, col: '150,220,255' });
-      fx.shake = Math.max(fx.shake, 4);
-    } else if (type === 'land' || type === 'dust' || type === 'fall' || type === 'step') {
-      dust(p.x, p.y, type === 'fall' ? 18 : 8, scale);
-      if (type === 'fall') fx.shake = Math.max(fx.shake, 10);
-    } else if (type === 'whiff') {
-      // nothing big; a faint swoosh comes from the trail already
+      fx.rings.push({ x: p.x, y: p.y, t: 0, max: clash ? 0.3 : 0.22, r: (clash ? 70 : 46) * scale, col: clash ? '255,210,120' : '150,220,255' });
+      fx.shake = Math.max(fx.shake, clash ? 7 : 4);
+    } else if (type === 'fall') {
+      dust(p.x, p.y, 18, scale); fx.shake = Math.max(fx.shake, 9);
+    } else if (type === 'begin') {
+      fx.flash = Math.max(fx.flash, 0.18);
     }
   }
   function dust(x, y, n, scale) {
@@ -414,12 +419,13 @@
     { name: 'Mountain Dojo', sky: ['#5b8fc9', '#8fbce6', '#cfe6f5', '#f6efe0'], sun: '#ffffff', hill: ['#7d9bb8', '#5d7b98', '#3d5b78'], floor: '#c49a64', floorD: '#8c6a40', petals: '#ffffff' }
   ];
   const stageCache = {};
-  function stageCanvas(si, w, h) {
-    const key = si + ':' + w + 'x' + h;
+  function stageCanvas(si, w, h, fyFrac) {
+    fyFrac = fyFrac || 0.73;
+    const key = si + ':' + w + 'x' + h + ':' + fyFrac;
     if (stageCache[key]) return stageCache[key];
     for (const k in stageCache) delete stageCache[k];
     const c = document.createElement('canvas'); c.width = Math.max(1, w); c.height = Math.max(1, h);
-    const g = c.getContext('2d'), S = STAGES[si], R = rand(7 + si * 13), fy = h * 0.78;
+    const g = c.getContext('2d'), S = STAGES[si], R = rand(7 + si * 13), fy = h * fyFrac;
     // sky
     const sk = g.createLinearGradient(0, 0, 0, fy);
     S.sky.forEach((col, k) => sk.addColorStop(k / (S.sky.length - 1), col));
@@ -584,7 +590,7 @@
     g.fillStyle = si === 1 ? 'rgba(180,200,190,0.10)' : 'rgba(255,240,210,0.13)'; g.fill();
     g.strokeStyle = si === 1 ? 'rgba(220,235,255,0.35)' : 'rgba(150,30,30,0.55)'; g.lineWidth = Math.max(2, h * 0.006); g.stroke();
     // starting lines
-    for (const f of [0.38, 0.62]) {
+    for (const f of (FT().START_X || [330, 630]).map(x => x / (FT().ARENA_W || 960))) {
       g.beginPath(); g.moveTo(w * f, mt + 6); g.lineTo(w * f + (f - 0.5) * w * 0.03, mb - 6); g.strokeStyle = 'rgba(255,255,255,0.28)'; g.stroke();
     }
     // horizon shine
@@ -629,51 +635,59 @@
   }
 
   // ---------- world ----------
-  function arenaW(state) { return state.arenaW || G('ARENA_W') || (G('FIGHT') && G('FIGHT').ARENA_W) || 1000; }
-  function fighterH(state) { return state.fighterH || G('FIGHTER_H') || (G('FIGHT') && G('FIGHT').FIGHTER_H) || 180; }
-  function stageOf(state) { return ((state.stage ?? Math.max(0, (state.round || 1) - 1)) % STAGES.length + STAGES.length) % STAGES.length; }
+  const stageOf = M => (((M.stage ?? (M.round || 1) - 1) % STAGES.length) + STAGES.length) % STAGES.length;
+  const dims = () => ({ W: FT().ARENA_W || 960, H: FT().STAGE_H || 540, FY: FT().FLOOR_Y || 440 });
+  const HORIZON = 46;                 // the back edge of the floor sits this far above the feet line
+  function pixelScale(g) { try { const m = g.getTransform(); return Math.max(0.5, Math.min(4, Math.hypot(m.a, m.b))); } catch (e) { return 1; } }
+  // The pre-drawn stage, built at screen resolution so it stays sharp.
+  function stageImage(g, si, W, H, FY) {
+    const k = pixelScale(g);
+    const c = stageCanvas(si, Math.round(W * k), Math.round(H * k), (FY - HORIZON) / H);
+    return c;
+  }
 
-  function drawWorld(g, state, view) {
-    view = view || { x: 0, y: 0, w: g.canvas.width, h: g.canvas.height };
-    const t = now(), dt = cl(t - fx.lastT, 0, 0.1); fx.lastT = t;
-    const si = stageOf(state), W = Math.round(view.w), H = Math.round(view.h);
-    const bg = stageCanvas(si, W, H), fy = bg.fy;
-    const aw = arenaW(state), sc = W / aw, fh = fighterH(state);
-    const floorY = view.y + fy + (H - fy) * 0.38;               // where feet stand: the middle of the mat
-    const toScreen = (x, y) => ({ x: view.x + x * sc, y: floorY - y * sc });
-    // new events -> effects
-    for (const ev of state.events || []) { if (ev && typeof ev === 'object' && !fx.seen.has(ev)) { fx.seen.add(ev); emit(ev, toScreen, sc); } }
+  function drawWorld(g, M, view) {
+    view = view || {};
+    const t = view.t ?? performance.now() / 1000; clock = t;
+    const dt = cl(view.dt ?? 1 / 60, 0, 0.1);
+    const { W, H, FY } = dims(), si = stageOf(M), fy = FY - HORIZON;
+    const toScreen = (x, y) => ({ x, y: FY - y });
+    for (const ev of M.events || []) if (ev && typeof ev === 'object' && !fx.seen.has(ev)) { fx.seen.add(ev); emit(ev, toScreen, 1); }
+    const fs = M.fighters || [];
+    fs.forEach((f, i) => {          // falls raise dust when the body meets the floor
+      const c = fcache(f, i);
+      if (f.act === 'down' && (f.t || 0) > 0.22 && !c.fell && (f.y || 0) < 4) { c.fell = true; emit({ type: 'fall', x: f.x - (f.facing || 1) * 40, y: 0 }, toScreen, 1); }
+      if (f.act !== 'down') c.fell = false;
+    });
+    for (const ev of M.events || []) if (ev && (ev.type === 'land' || ev.type === 'jump') && ev.by != null && fs[ev.by]) dust(fs[ev.by].x, FY, ev.type === 'land' ? 8 : 5, 1);
     stepFx(dt);
     g.save();
-    g.beginPath(); g.rect(view.x, view.y, view.w, view.h); g.clip();
     const sx = fx.shake ? (Math.random() - 0.5) * fx.shake : 0, sy = fx.shake ? (Math.random() - 0.5) * fx.shake : 0;
     g.translate(sx, sy);
-    g.drawImage(bg, view.x - 10, view.y - 10, W + 20, H + 20);
-    g.save(); g.translate(view.x, view.y); drawAmbient(g, si, W, H, fy, t, dt); g.restore();
-    const fs = state.fighters || [];
-    // shadows
-    fs.forEach(f => {
-      const p = toScreen(f.x || 0, 0), up = cl((f.y || 0) / 200, 0, 0.7);
+    g.drawImage(stageImage(g, si, W, H, FY), -12, -12, W + 24, H + 24);
+    drawAmbient(g, si, W, H, fy, t, dt);
+    const fh = (FT().STAND_H || 150) / 0.97;
+    fs.forEach(f => {               // shadows
+      const up = cl((f.y || 0) / 220, 0, 0.7);
       g.fillStyle = 'rgba(0,0,0,' + (0.38 * (1 - up)) + ')';
-      g.beginPath(); g.ellipse(p.x, p.y + 2, fh * sc * 0.32 * (1 - up * 0.5), fh * sc * 0.05, 0, 0, TAU); g.fill();
+      g.beginPath(); g.ellipse(f.x, FY + 2, fh * 0.3 * (1 - up * 0.5), fh * 0.05, 0, 0, TAU); g.fill();
     });
-    // fighters: the one attacking or hitting draws on top
-    const order = fs.map((f, i) => [f, i]).sort((a, b) => (a[0].phase === 'active' ? 1 : 0) - (b[0].phase === 'active' ? 1 : 0));
+    // the fighter mid-attack draws on top
+    const order = fs.map((f, i) => [f, i]).sort((a, b) => (a[0].act === 'attack' ? 1 : 0) - (b[0].act === 'attack' ? 1 : 0));
     for (const [f, i] of order) {
-      const c = fcache(f, i);
-      if ((f.hitT > 0 || /hit|stun/.test(f.move || '')) && c.lastHit <= 0) c.flash = 1;
-      c.lastHit = f.hitT > 0 || /hit|stun/.test(f.move || '') ? 1 : 0;
+      const c = fcache(f, i), hurt = f.act === 'hit' || f.act === 'down';
+      if (hurt && !c.wasHurt) c.flash = 1;
+      c.wasHurt = hurt;
       c.flash = Math.max(0, c.flash - dt * 7);
-      const p = toScreen(f.x || 0, f.y || 0), col = hexRgb(f.trailColor || '#ffffff');
-      drawTrail(g, c.trail, col);
-      const hitP = drawFighter(g, f, { x: p.x, y: p.y, scale: fh * sc, i, t, flash: c.flash });
-      if (hitP) c.trail.push({ x: hitP.x, y: hitP.y, s: hitP.strike, w: fh * sc * 0.07 });
+      drawTrail(g, c.trail, [255, 255, 255]);
+      const hitP = drawFighter(g, f, { x: f.x, y: FY - (f.y || 0), scale: fh, i, t, flash: c.flash, M });
+      if (hitP) c.trail.push({ x: hitP.x, y: hitP.y, s: hitP.strike, w: fh * 0.07 });
       else if (c.trail.length) c.trail.shift();
       if (c.trail.length > 7) c.trail.shift();
     }
     drawFx(g);
     g.restore();
-    if (fx.flash > 0) { g.fillStyle = 'rgba(255,255,255,' + fx.flash * 0.5 + ')'; g.fillRect(view.x, view.y, view.w, view.h); }
+    if (fx.flash > 0) { g.fillStyle = 'rgba(255,255,255,' + fx.flash * 0.5 + ')'; g.fillRect(0, 0, W, H); }
   }
 
   // ---------- HUD ----------
@@ -687,79 +701,77 @@
   function panel(g, x, y, w, h, r) { g.fillStyle = 'rgba(10,12,20,0.72)'; rrect(g, x, y, w, h, r ?? 10); g.fill(); }
   const msgAnim = { text: '', t0: 0 };
 
-  function pointsOf(state, f, i) {
-    if (f.points != null) return f.points;
-    if (f.score != null && state.pointsToWin) return f.score;
-    if (state.points) return state.points[i];
-    if (state.score && Array.isArray(state.score)) return state.score[i];
-    return 0;
-  }
-  function drawHUD(g, state, view) {
-    view = view || { x: 0, y: 0, w: g.canvas.width, h: g.canvas.height };
-    const W = view.w, u = cl(W / 1100, 0.6, 1.6), t = now(), fs = state.fighters || [];
-    const need = state.pointsToWin || G('POINTS_TO_WIN') || 2;
-    g.save(); g.translate(view.x, view.y);
-    // name plates and point medallions
+  function drawHUD(g, M, view) {
+    view = view || {};
+    const { W, H } = dims(), t = view.t ?? now(), fs = M.fighters || [];
+    const pips = Math.ceil((FT().POINTS_TO_WIN || 4) / 2), roundsNeed = FT().ROUNDS_TO_WIN || 2;
     fs.slice(0, 2).forEach((f, i) => {
-      const right = i === 1, pw = 300 * u, x = right ? W - 20 * u - pw : 20 * u, y = 18 * u;
-      const col = f.color || (i ? '#d23b3b' : '#f2efe6');
+      const right = i === 1, pw = 290, x = right ? W - 18 - pw : 18, y = 16;
+      const col = GI[f.color] || f.color || (i ? GI.red : GI.white);
       const grd = g.createLinearGradient(x, 0, x + pw, 0);
-      grd.addColorStop(right ? 1 : 0, 'rgba(10,12,20,0.85)'); grd.addColorStop(right ? 0 : 1, 'rgba(10,12,20,0.25)');
-      g.fillStyle = grd; rrect(g, x, y, pw, 54 * u, 12 * u); g.fill();
-      g.fillStyle = col; rrect(g, right ? x + pw - 8 * u : x, y, 8 * u, 54 * u, 4 * u); g.fill();
-      text(g, (f.name || 'PLAYER ' + (i + 1)).toUpperCase(), right ? x + pw - 22 * u : x + 22 * u, y + 18 * u, 18 * u, '#fff', right ? 'right' : 'left', '900');
-      if (state.wins) text(g, '★'.repeat(state.wins[i] || 0), right ? x + 22 * u : x + pw - 22 * u, y + 18 * u, 16 * u, '#ffd84a', right ? 'left' : 'right', '700');
-      const pts = pointsOf(state, f, i);
-      for (let k = 0; k < need; k++) {
-        const cx = right ? x + pw - 32 * u - k * 30 * u : x + 32 * u + k * 30 * u, cy = y + 39 * u;
-        const full = pts >= k + 1, half = !full && pts >= k + 0.5;
-        g.fillStyle = 'rgba(255,255,255,0.15)'; g.beginPath(); g.arc(cx, cy, 10 * u, 0, TAU); g.fill();
-        if (full || half) {
-          g.fillStyle = '#ffd84a'; g.beginPath();
-          if (half) { g.moveTo(cx, cy); g.arc(cx, cy, 10 * u, Math.PI / 2, Math.PI * 1.5, right); g.closePath(); }
-          else g.arc(cx, cy, 10 * u, 0, TAU);
+      grd.addColorStop(right ? 1 : 0, 'rgba(12,8,10,0.86)'); grd.addColorStop(right ? 0 : 1, 'rgba(12,8,10,0.2)');
+      g.fillStyle = grd; rrect(g, x, y, pw, 58, 12); g.fill();
+      g.fillStyle = col; rrect(g, right ? x + pw - 8 : x, y, 8, 58, 4); g.fill();
+      const name = ((view.labels && view.labels[i]) || f.name || 'PLAYER ' + (i + 1)).toUpperCase();
+      text(g, name, right ? x + pw - 22 : x + 22, y + 18, 18, '#fff', right ? 'right' : 'left', '900');
+      // round wins: small gold diamonds
+      for (let k = 0; k < roundsNeed; k++) {
+        const cx = right ? x + 24 + k * 20 : x + pw - 24 - k * 20, cy = y + 18, won = k < (f.rounds || 0);
+        g.save(); g.translate(cx, cy); g.rotate(Math.PI / 4);
+        g.fillStyle = won ? '#ffd84a' : 'rgba(255,255,255,0.14)'; g.fillRect(-6, -6, 12, 12);
+        g.strokeStyle = won ? '#fff3b0' : 'rgba(255,255,255,0.35)'; g.lineWidth = 1.5; g.strokeRect(-6, -6, 12, 12);
+        g.restore();
+      }
+      // points: a full medallion per point, half filled for a half point
+      const sc = (f.score || 0) / 2;
+      for (let k = 0; k < pips; k++) {
+        const cx = right ? x + pw - 34 - k * 32 : x + 34 + k * 32, cy = y + 41, v = cl(sc - k, 0, 1);
+        g.fillStyle = 'rgba(255,255,255,0.13)'; g.beginPath(); g.arc(cx, cy, 11, 0, TAU); g.fill();
+        if (v > 0) {
+          const grad = g.createRadialGradient(cx - 3, cy - 3, 1, cx, cy, 11);
+          grad.addColorStop(0, '#fff6c4'); grad.addColorStop(1, '#e9a91a');
+          g.fillStyle = grad; g.beginPath();
+          if (v < 1) { g.moveTo(cx, cy); g.arc(cx, cy, 11, Math.PI / 2, Math.PI * 1.5, right); g.closePath(); }
+          else g.arc(cx, cy, 11, 0, TAU);
           g.fill();
         }
-        g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 1.5; g.beginPath(); g.arc(cx, cy, 10 * u, 0, TAU); g.stroke();
+        g.strokeStyle = 'rgba(255,255,255,0.6)'; g.lineWidth = 1.5; g.beginPath(); g.arc(cx, cy, 11, 0, TAU); g.stroke();
       }
     });
     // timer medallion
-    const tm = state.timer ?? state.time ?? state.clock;
-    if (tm != null) {
-      const cx = W / 2, cy = 46 * u, r = 34 * u, low = tm <= 10;
-      g.fillStyle = 'rgba(10,12,20,0.85)'; g.beginPath(); g.arc(cx, cy, r, 0, TAU); g.fill();
-      g.strokeStyle = low ? '#ff5a4d' : '#ffd84a'; g.lineWidth = 3 * u; g.beginPath(); g.arc(cx, cy, r - 3 * u, 0, TAU); g.stroke();
+    if (M.timer != null) {
+      const cx = W / 2, cy = 46, r = 33, low = M.phase === 'fight' && M.timer <= 10;
+      g.fillStyle = 'rgba(12,8,10,0.86)'; g.beginPath(); g.arc(cx, cy, r, 0, TAU); g.fill();
+      const tot = FT().ROUND_TIME || 30;
+      g.strokeStyle = 'rgba(255,255,255,0.12)'; g.lineWidth = 4; g.beginPath(); g.arc(cx, cy, r - 4, 0, TAU); g.stroke();
+      g.strokeStyle = low ? '#ff5a4d' : '#ffd84a'; g.beginPath(); g.arc(cx, cy, r - 4, -Math.PI / 2, -Math.PI / 2 + TAU * cl(M.timer / tot, 0, 1)); g.stroke();
       const pulse = low ? 1 + 0.08 * Math.sin(t * 10) : 1;
-      text(g, String(Math.max(0, Math.ceil(tm))), cx, cy + 1, 30 * u * pulse, low ? '#ff8a80' : '#fff', 'center', '900');
-      if (state.round) text(g, 'ROUND ' + state.round, cx, cy + r + 14 * u, 12 * u, '#cfd8e3', 'center', '800');
+      text(g, String(Math.max(0, Math.ceil(M.timer))), cx, cy + 1, 30 * pulse, low ? '#ff8a80' : '#fff', 'center', '900');
+      if (M.round) text(g, 'ROUND ' + M.round, cx, cy + r + 13, 12, '#e8dccb', 'center', '800');
     }
     // big centre message, slammed in then held
-    const msg = state.message || (state.phase === 'intro' ? 'BEGIN' : '');
+    const msg = M.message || '';
     if (msg) {
       if (msg !== msgAnim.text) { msgAnim.text = msg; msgAnim.t0 = t; }
-      const k = cl((t - msgAnim.t0) / 0.22, 0, 1), sz = Math.min(96, W / (msg.length * 0.55 + 2)) * u / Math.max(u, 1) * (1 + (1 - easeOut(k)) * 0.8);
-      const cy = view.h * 0.36;
-      g.fillStyle = 'rgba(0,0,0,' + 0.45 * k + ')'; g.fillRect(0, cy - sz * 0.75, W, sz * 1.5);
-      g.fillStyle = 'rgba(255,216,74,' + 0.9 * k + ')'; g.fillRect(0, cy - sz * 0.75, W, 3); g.fillRect(0, cy + sz * 0.75 - 3, W, 3);
+      const k = cl((t - msgAnim.t0) / 0.22, 0, 1), sz = Math.min(76, W / (msg.length * 0.62 + 1.5)) * (1 + (1 - easeOut(k)) * 0.8);
+      const cy = H * 0.36, band = Math.min(76, W / (msg.length * 0.62 + 1.5)) * 0.8;
+      const grd = g.createLinearGradient(0, 0, W, 0);
+      grd.addColorStop(0, 'rgba(0,0,0,0)'); grd.addColorStop(0.2, 'rgba(0,0,0,' + 0.5 * k + ')'); grd.addColorStop(0.8, 'rgba(0,0,0,' + 0.5 * k + ')'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grd; g.fillRect(0, cy - band, W * k + (1 - k) * W * 0.5, band * 2);
+      g.fillStyle = 'rgba(255,216,74,' + 0.9 * k + ')'; g.fillRect(W * 0.2, cy - band, W * 0.6, 2); g.fillRect(W * 0.2, cy + band - 2, W * 0.6, 2);
       g.globalAlpha = k;
-      text(g, msg.toUpperCase(), W / 2, cy, sz, '#fff', 'center', '900', '#b3121b');
-      if (state.subMessage) text(g, state.subMessage, W / 2, cy + sz * 0.95, Math.max(14, sz * 0.25), '#ffd84a', 'center', '700');
+      text(g, msg.toUpperCase(), W / 2, cy, sz, '#fff', 'center', '900', '#9e1016');
       g.globalAlpha = 1;
     } else msgAnim.text = '';
-    g.restore();
   }
 
   // ---------- menu backdrop ----------
-  let lastBackdrop = now();
-  function backdrop(g, w, h, stage, dim) {
-    const si = ((stage || 0) % STAGES.length + STAGES.length) % STAGES.length, t = now(), dt = cl(t - lastBackdrop, 0, 0.1); lastBackdrop = t;
-    const bg = stageCanvas(si, Math.round(w), Math.round(h));
-    g.drawImage(bg, 0, 0, w, h); drawAmbient(g, si, w, h, bg.fy, t, dt);
-    if (dim !== false) { g.fillStyle = 'rgba(8,8,16,' + (dim ?? 0.45) + ')'; g.fillRect(0, 0, w, h); }
+  function backdrop(g, w, h, stage, t, dt) {
+    const si = ((stage || 0) % STAGES.length + STAGES.length) % STAGES.length;
+    t = t ?? performance.now() / 1000; clock = t;
+    const c = stageCanvas(si, Math.round(w * pixelScale(g)), Math.round(h * pixelScale(g)), 0.73);
+    g.drawImage(c, 0, 0, w, h); drawAmbient(g, si, w, h, h * 0.73, t, dt ?? 1 / 60);
   }
 
-  window.drawWorld = drawWorld;
-  window.drawHUD = drawHUD;
-  window.drawFighter = drawFighter;
-  window.Render = { drawWorld, drawHUD, drawFighter, backdrop, text, panel, STAGES, POSES: P, poseFor, fx };
+  return { drawWorld, drawHUD, drawFighter, backdrop, text, panel, STAGES, POSES: P, poseFor, fx };
 })();
