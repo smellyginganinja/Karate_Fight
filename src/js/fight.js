@@ -252,12 +252,12 @@ const Fight = (() => {
   // ---------- network snapshots (host -> joiner) ----------
   const r1 = v => Math.round(v * 10) / 10, r3 = v => Math.round(v * 1000) / 1000;
   function snapshot(M) {
-    return { p: M.phase, pt: r3(M.phaseT), r: M.round, tm: r3(M.timer), msg: M.message, w: M.winner, pb: M.pointBy,
+    return { p: M.phase, pt: r3(M.phaseT), r: M.round, tm: r3(M.timer), msg: M.message, w: M.winner, pb: M.pointBy, il: M.introLong ? 1 : 0,
       f: M.fighters.map(f => [r1(f.x), r1(f.y), r1(f.vx), r1(f.vy), f.facing, ACTS.indexOf(f.act), f.move ? MOVE_NAMES.indexOf(f.move) : -1,
         r3(f.t), f.score, f.rounds, (f.crouch ? 1 : 0) | (f.blocking ? 2 : 0) | (f.connected ? 4 : 0), f.walking]) };
   }
   function applySnapshot(M, s) {
-    M.phase = s.p; M.phaseT = s.pt; M.round = s.r; M.timer = s.tm; M.message = s.msg; M.winner = s.w; M.pointBy = s.pb;
+    M.phase = s.p; M.phaseT = s.pt; M.round = s.r; M.timer = s.tm; M.message = s.msg; M.winner = s.w; M.pointBy = s.pb; M.introLong = !!s.il;
     s.f.forEach((a, i) => {
       const f = M.fighters[i];
       f.nx = a[0]; f.y = a[1]; f.vx = a[2]; f.vy = a[3]; f.facing = a[4]; f.act = ACTS[a[5]] || 'idle';
@@ -279,6 +279,6 @@ const Fight = (() => {
     }
   }
 
-  return { ARENA_W, FLOOR_Y, STAGE_H, START_X, MOVES, ACTS, ROUND_TIME, POINTS_TO_WIN, ROUNDS_TO_WIN, STAND_H, CROUCH_H, NEUTRAL,
+  return { ARENA_W, FLOOR_Y, STAGE_H, START_X, MOVES, ACTS, ROUND_TIME, POINTS_TO_WIN, ROUNDS_TO_WIN, T_BLOCK, T_HIT, T_DOWN, STAND_H, CROUCH_H, NEUTRAL,
     create, step, snapshot, applySnapshot, coast, attackPhase };
 })();
