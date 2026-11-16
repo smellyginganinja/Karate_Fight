@@ -240,7 +240,7 @@ function drawMenu(t) {
     text(it.label(), W / 2, y + 23, 19, '#fff', 'center', '800');
   });
   if (menuNote && performance.now() < menuNote.until) text(menuNote.text, W / 2, 482, 16, '#ffd84a', 'center', '700');
-  text('Arrows + Enter to choose  ·  M mute  ·  N music  ·  F11 / ⌃⌘F fullscreen', W / 2, 515, 13, 'rgba(255,255,255,0.7)', 'center', '500');
+  text('Arrows + Enter to choose  ·  M sound: ' + (Sound.muted ? 'OFF' : 'on') + '  ·  N music: ' + (Sound.musicOn ? 'on' : 'OFF') + '  ·  F11 / ⌃⌘F fullscreen', W / 2, 515, 13, 'rgba(255,255,255,0.7)', 'center', '500');
 }
 function drawHelp() {
   panel(70, 40, W - 140, H - 80);
