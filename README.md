@@ -3,7 +3,7 @@
 An original two-fighter karate game for the browser. Score clean hits for half and full points: the first to 2 full points takes the round, best of 3 rounds wins. Play the CPU, a friend on the same computer, or a friend online.
 
 ## Play
-- **Online:** https://smellyginganinja.github.io/karate_fight/ (once GitHub Pages is switched on for this repo)
+- **Online:** https://smellyginganinja.github.io/Karate_Fight/ (needs GitHub Pages switched on: Settings, Pages, Deploy from a branch, main, / (root))
 - **In a browser:** double-click `index.html` (Safari or Chrome).
 
 ## Modes
