@@ -246,7 +246,7 @@ function drawHelp() {
   panel(70, 40, W - 140, H - 80);
   text('HOW TO PLAY', W / 2, 78, 32, '#fff', 'center', '900');
   const rows = [
-    ['Score', 'Clean hit = half or full point. First to 2 full points wins the round; best of 3 rounds.'],
+    ['Score', 'Clean hit = half or full point. First to 5 full points wins the round; best of 3 rounds.'],
     ['Block', 'Hold away from your opponent. Crouch-block (down + away) stops sweeps.'],
     ['Punch', 'Jab · forward+punch: lunge · down+punch: low punch  (half points)'],
     ['Kick', 'Front kick (half) · forward+kick: roundhouse · away+kick: spin kick · down+kick: sweep (full)'],

@@ -343,8 +343,8 @@ const GamepadInput = (() => {
    press counts for punch, kick and jump. A press is "the count went up since last step", so a
    quick tap is never missed, even online.
 
-   Scoring: a clean hit scores a half point (1) or a full point (2). The first fighter to 2 full
-   points (score 4) takes the round; first to 2 rounds wins the match. After every point both
+   Scoring: a clean hit scores a half point (1) or a full point (2). The first fighter to 5 full
+   points (score 10) takes the round; first to 2 rounds wins the match. After every point both
    fighters go back to their marks. A round that times out goes to the higher score; a tie is a
    draw and the round is fought again. */
 const Fight = (() => {
@@ -352,7 +352,7 @@ const Fight = (() => {
   const START_X = [330, 630];
   const EDGE = 40, MIN_GAP = 64;
   const WALK = 210, BACK_WALK = 165, JUMP_V = 735, JUMP_X = 215, GRAV = 2500;
-  const ROUND_TIME = 30, POINTS_TO_WIN = 4, ROUNDS_TO_WIN = 2;
+  const ROUND_TIME = 60, POINTS_TO_WIN = 10, ROUNDS_TO_WIN = 2;
   const STAND_H = 150, CROUCH_H = 95;
   // phase lengths in seconds
   const T_INTRO = 1.9, T_REMARK = 1.2, T_POINT = 2.0, T_ROUND = 2.8;
@@ -2110,7 +2110,7 @@ function drawHelp() {
   panel(70, 40, W - 140, H - 80);
   text('HOW TO PLAY', W / 2, 78, 32, '#fff', 'center', '900');
   const rows = [
-    ['Score', 'Clean hit = half or full point. First to 2 full points wins the round; best of 3 rounds.'],
+    ['Score', 'Clean hit = half or full point. First to 5 full points wins the round; best of 3 rounds.'],
     ['Block', 'Hold away from your opponent. Crouch-block (down + away) stops sweeps.'],
     ['Punch', 'Jab · forward+punch: lunge · down+punch: low punch  (half points)'],
     ['Kick', 'Front kick (half) · forward+kick: roundhouse · away+kick: spin kick · down+kick: sweep (full)'],
