@@ -7,7 +7,7 @@
 <script src="../src/js/render.js"></script>
 <script>
 // Art preview: every pose and stage without playing. Open in a browser.
-// URL options: ?gallery=1 (all poses)  &stage=0..2  &move=<act or move name>  &mt=<seconds into it, freezes the pose>
+// URL options: ?gallery=1 (all poses)  &stage=0..6  &move=<act or move name>  &mt=<seconds into it, freezes the pose>
 const g = cvs.getContext('2d'), q = new URLSearchParams(location.search);
 const ITEMS = ['idle', 'walk', 'crouch', 'block', 'jump', ...Object.keys(Fight.MOVES), 'hit', 'down', 'win', 'lose'];
 function fake(name, mt, idx) {
