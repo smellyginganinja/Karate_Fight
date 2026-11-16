@@ -5,13 +5,15 @@ const Sound = (() => {
   let ac = null, master = null, noise = null, muted = !!store.get('muted', false);
   const safe = fn => (...a) => { try { return fn(...a); } catch (e) {} };
   function init() {
-    if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+    if (ac) { if (ac.state !== 'running' && !document.hidden) ac.resume().then(safe(applySong)); return; }
     const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
     ac = new AC(); master = ac.createGain(); master.gain.value = muted ? 0 : 0.6; master.connect(ac.destination);
     noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
     const d = noise.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
   }
-  ['keydown', 'pointerdown', 'touchstart'].forEach(e => addEventListener(e, safe(init), { passive: true }));
+  // every kind of first touch, click or key press can unlock audio (Safari is picky about which count)
+  const UNLOCK = ['keydown', 'keyup', 'pointerdown', 'mousedown', 'click', 'touchstart', 'touchend'];
+  UNLOCK.forEach(e => addEventListener(e, safe(init), { passive: true, capture: true }));
 
   function env(g, t, a, peak, dec) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + a + dec); }
   function tone(type, f0, f1, dur, vol, delay) {
@@ -197,7 +199,7 @@ const Sound = (() => {
   }
   // pause everything while the tab is hidden (timers are throttled there, which would garble the music)
   document.addEventListener('visibilitychange', safe(() => { if (!ac) return; if (document.hidden) ac.suspend(); else ac.resume(); }));
-  ['keydown', 'pointerdown', 'touchstart'].forEach(e => addEventListener(e, safe(applySong), { passive: true }));
+  UNLOCK.forEach(e => addEventListener(e, safe(applySong), { passive: true, capture: true }));
 
   return {
     get muted() { return muted; },
