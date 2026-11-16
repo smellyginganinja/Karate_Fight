@@ -9,8 +9,8 @@
    press counts for punch, kick and jump. A press is "the count went up since last step", so a
    quick tap is never missed, even online.
 
-   Scoring: a clean hit scores a half point (1) or a full point (2). The first fighter to 2 full
-   points (score 4) takes the round; first to 2 rounds wins the match. After every point both
+   Scoring: a clean hit scores a half point (1) or a full point (2). The first fighter to 5 full
+   points (score 10) takes the round; first to 2 rounds wins the match. After every point both
    fighters go back to their marks. A round that times out goes to the higher score; a tie is a
    draw and the round is fought again. */
 const Fight = (() => {
@@ -18,7 +18,7 @@ const Fight = (() => {
   const START_X = [330, 630];
   const EDGE = 40, MIN_GAP = 64;
   const WALK = 210, BACK_WALK = 165, JUMP_V = 735, JUMP_X = 215, GRAV = 2500;
-  const ROUND_TIME = 30, POINTS_TO_WIN = 4, ROUNDS_TO_WIN = 2;
+  const ROUND_TIME = 60, POINTS_TO_WIN = 10, ROUNDS_TO_WIN = 2;
   const STAND_H = 150, CROUCH_H = 95;
   // phase lengths in seconds
   const T_INTRO = 1.9, T_REMARK = 1.2, T_POINT = 2.0, T_ROUND = 2.8;
