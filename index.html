@@ -180,7 +180,7 @@ const Fight = (() => {
   const ROUND_TIME = 30, POINTS_TO_WIN = 4, ROUNDS_TO_WIN = 2;
   const STAND_H = 150, CROUCH_H = 95;
   // phase lengths in seconds
-  const T_INTRO = 1.5, T_REMARK = 0.8, T_POINT = 1.4, T_ROUND = 2.2;
+  const T_INTRO = 1.9, T_REMARK = 1.2, T_POINT = 2.0, T_ROUND = 2.8;
 
   // Moves. startup/active/recover in seconds. reach: how far in front of the attacker's centre it lands.
   // height: 'high' misses a crouching fighter, 'low' misses a jumping one, 'mid' hits both standing and crouching.
@@ -202,7 +202,7 @@ const Fight = (() => {
   const MOVE_NAMES = Object.keys(MOVES);
   // Fighter states (act). How long the timed ones last:
   const ACTS = ['idle', 'walk', 'crouch', 'block', 'jump', 'attack', 'hit', 'down', 'win', 'lose'];
-  const T_BLOCK = 0.18, T_HIT = 0.45, T_DOWN = 1.2;
+  const T_BLOCK = 0.18, T_HIT = 0.45, T_DOWN = 1.6;
 
   const NEUTRAL = { l: false, r: false, u: false, d: false, pc: 0, kc: 0, jc: 0 };
 
